@@ -1,0 +1,209 @@
+---
+title: "Peer Assignment 2 - Weather Event Impacts on Economic and Human Health Factors"
+author: "Bill Kable"
+date: "June 20, 2015"
+output: html_document
+---
+
+## Synopsis
+This analysis demonstrates based from data provided by the National Weather Service Storm Database, answers to the following questions:
+
+1. Across the United States, which types of events (as indicated in the EVTYPE variable) are most harmful with respect to population health?  The results will show the highest impact events affecting Human Heath are: Toronados, Heat, Thunderstorms, Floods
+
+2. Across the United States, which types of events have the greatest economic consequences?  The results will show the highest impact events affecting Economic are: 
+Floods, Hurricanes, Toronado, Storms, Flash Floods.
+
+The study is done across period 1952 -> 2011.  Note that Dollar based impact values ARE NOT adjusted for inflation.
+
+## Data Processing
+This project involves exploring the U.S. National Oceanic and Atmospheric Administration's (NOAA) storm database. This database tracks characteristics of major storms and weather events in the United States, including when and where they occur, as well as estimates of any fatalities, injuries, and property damage.
+
+The following resources were used to support this study:
+
+- [Storm Data](https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2) [47Mb]
+- National Weather Service [Storm Data Documentation](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf)
+- National Climatic Data Center Storm Events [FAQ](https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2FNCDC%20Storm%20Events-FAQ%20Page.pdf)
+
+### Data Cleaning & Transformations
+#### Tidy Violations & Cleaning
+Cursory analysis of the raw dataset showed following violations of tidy data:
+
+- The economic factors, Property Damage, and Crop Damage, split variable across multiple columns (one column used for value, the other for base-10 expontential factor -- the exponential factor is not consisent with the Storm Data Code Book, and must to be cleaned/normalized (this is one of two transformation of data variables in the project))
+- The event type data (EVTYPE) is not normalized to the Event Categories outlined in Chapter 7 of the Storm Data Code Book (Documentation).  Analysis was done at split data level given the relative low number of records in the split data summary set.  The 2nd transformation in the project was done to clean the event types.  These records were matched to the Event type category through two generated files:
+- **mapped.evtypes.csv** --> This is the set of distinct events in the filtered set for both Human and Economic factors -- this list was curated with following criteria
+- Misspellings mapped
+- Logical equality (intent) mapped
+- Any event entry containing a composite was excluded.
+- Any event not readily interpreted as one of event categoy list were excluded.
+
+### Data Processing
+- Following are libraries used in this project:
+
+```{r library.load, message=FALSE, warning=FALSE}
+library(data.table)
+library(dplyr)
+library(ggplot2)
+library(stringr)
+setwd("/Users/bkable/GitHub//RepData_PeerAssessment2")
+```
+
+#### Reference Data Load
+- **ref.evtype.list.csv** --> This is the Storm Data Chapter 7 reference for expected event types, used as reference for
+EVTYPE cleaning.
+- **ref.state.list.csv** --> This is list of state abrreviations for filtering raw data set for US geography.
+- **cleaned.evtypes.dt.csv** --> This is list of "Cleaned" event type mapping to the event catalog list,  discussed more in process and cleaning section below.
+
+
+```{r load.ref.data, message=FALSE, warning=FALSE}
+ref.evtype.list.df <- fread("./ref.evtype.list.csv")
+ref.state.list.df <- fread("./ref.state.list.csv")
+mapped.evtypes.dt <- fread("./cleaned.evtypes.dt.csv") %>%
+        filter(EVTYPE.MAPPED != "")
+```
+
+#### Load Raw Data, Preprocess for efficienct use in R data tables
+- First we will load raw data
+- **repdata-data-StormData.csv** --> This is the raw storm dataset in uncompressed form -- given its size it was staged on 
+
+```{r load-raw,message=FALSE,warning=FALSE}
+stormdata.raw.df <- read.csv(bzfile("./repdata-data-StormData.csv.bz2"))
+```
+
+#### Prefilter the raw table
+Only geographical US was included, and we only care about variables impacting economic and health related factors, all other variables besides key (EVTYPE) and impact factors were excluded for better performance.
+
+```{r load.and.prefilter,message=FALSE,warning=FALSE}
+stormdata.df <- filter(stormdata.raw.df,STATE %in% ref.state.list.df$STATE) %>%
+                select(REFNUM,
+                       BGN_DATE,
+                       EVTYPE,
+                       FATALITIES,
+                       INJURIES,
+                       PROPDMG, 
+                       PROPDMGEXP,
+                       CROPDMG,
+                       CROPDMGEXP)
+
+write.csv(stormdata.df,"./stormdata.csv")
+stormdata.cleaned.df <- fread("./stormdata.csv")
+```
+
+The prefiltered data is stored as **stormdata.csv** for intermediate use and performance.
+
+#### Process the Data
+- Load back the dataset
+
+```{r load-filtered,message=FALSE,warning=FALSE}
+stormdata.cleaned.df <- fread("./stormdata.csv")
+
+stormdata.cleaned.df$BGN_DATE <- as.Date(stormdata.cleaned.df$BGN_DATE, "%m/%d/%Y")
+stormdata.cleaned.df$EVTYPE <- toupper(stormdata.cleaned.df$EVTYPE)
+```
+
+- Clean the Economic Factors (Economic Factors, including the USD sum of the Property, and Crop damage, for a particular event)
+
+```{r clean.econ.factors,message=FALSE,warning=FALSE}
+## Clean Crop impact
+stormdata.cleaned.df$CROPDMGEXPNUM <- 0
+stormdata.cleaned.df$CROPDMGEXPNUM[stormdata.cleaned.df$CROPDMGEXP %in% c("k","K")] <- 1000
+stormdata.cleaned.df$CROPDMGEXPNUM[stormdata.cleaned.df$CROPDMGEXP %in% c("m","M")] <- 1000000
+stormdata.cleaned.df$CROPDMGEXPNUM[stormdata.cleaned.df$CROPDMGEXP %in% c("b","B")] <- 1000000000
+## Clean Prop impact
+stormdata.cleaned.df$PROPDMGEXPNUM <- 0
+stormdata.cleaned.df$PROPDMGEXPNUM[stormdata.cleaned.df$PROPDMGEXP %in% c("k","K")] <- 1000
+stormdata.cleaned.df$PROPDMGEXPNUM[stormdata.cleaned.df$PROPDMGEXP %in% c("m","M")] <- 1000000
+stormdata.cleaned.df$PROPDMGEXPNUM[stormdata.cleaned.df$PROPDMGEXP %in% c("b","B")] <- 1000000000
+stormdata.cleaned.df$PROPDMGDOL <- stormdata.cleaned.df$PROPDMG * stormdata.cleaned.df$PROPDMGEXPNUM
+```
+
+- Build Economic Impact Dataset
+
+```{r build.econ.set,message=FALSE,warning=FALSE}
+stormdata.econ.dt <- select(stormdata.cleaned.df, REFNUM,
+                            BGN_DATE,
+                            EVTYPE,
+                            PROPDMGDOL) %>%
+                        filter(PROPDMGDOL > 0) %>%
+                        arrange(desc(PROPDMGDOL))
+
+stormdata.econ.summary.dt <- group_by(stormdata.econ.dt,EVTYPE) %>%
+        summarize(TOTAL = sum(PROPDMGDOL)) %>%
+        data.table
+
+```
+
+- Clean Economic Event Types by replacing dirty records with mapped event reference types
+
+```{r clean.econ.events,message=FALSE,warning=FALSE}
+stormdata.econ.summary.cleaned.dt <- inner_join(mapped.evtypes.dt,stormdata.econ.summary.dt, by = c("EVTYPE")) %>%
+        select(EVTYPE.MAPPED,TOTAL)
+setnames(stormdata.econ.summary.cleaned.dt,c("EVTYPE","TOTAL"))
+stormdata.econ.summary.orig.dt <- inner_join(ref.evtype.list.df,stormdata.econ.summary.dt, by = c("EVTYPE"))
+
+stormdata.econ.summary.dt <- rbind(stormdata.econ.summary.cleaned.dt,
+                                 stormdata.econ.summary.orig.dt) %>%
+                                arrange(desc(TOTAL))
+```
+
+- Preprocess Human Health Dataset (Human Health Factors, including the sum of the Injuries, and Fatalies, for a particular event)
+
+```{r process.hh.set,message=FALSE,warning=FALSE}
+stormdata.cleaned.df$HHIMPACT <- stormdata.cleaned.df$FATALITIES + stormdata.cleaned.df$INJURIES
+stormdata.hh.dt <- select(stormdata.cleaned.df, REFNUM,
+                                                BGN_DATE,
+                                                EVTYPE,
+                                                HHIMPACT) %>%
+                        filter(HHIMPACT > 0) 
+stormdata.hh.summary.dt <- group_by(stormdata.hh.dt,EVTYPE) %>%
+        summarize(TOTAL = sum(HHIMPACT)) %>%
+        data.table %>%
+        arrange(desc(TOTAL))
+```
+
+- Clean Event Data by replacing dirty records with mapped event reference types
+
+```{r clean.hh.event,message=FALSE,warning=FALSE}
+stormdata.hh.summary.cleaned.dt <- inner_join(mapped.evtypes.dt,stormdata.hh.summary.dt, by = c("EVTYPE")) %>%
+                                select(EVTYPE.MAPPED,TOTAL)
+setnames(stormdata.hh.summary.cleaned.dt,c("EVTYPE","TOTAL"))
+stormdata.hh.summary.orig.dt <- inner_join(ref.evtype.list.df,stormdata.hh.summary.dt, by = c("EVTYPE"))
+
+stormdata.hh.summary.dt <- rbind(stormdata.hh.summary.cleaned.dt,
+                                 stormdata.hh.summary.orig.dt) %>%
+                                arrange(desc(TOTAL))
+```
+
+### Build final summary
+
+```{r final.summary,message=FALSE,warning=FALSE}
+# Build aggregrate summary for events types
+stormdata.hh.finalsummary.dt <- stormdata.hh.summary.dt[stormdata.hh.summary.dt$EVTYPE %in% ref.evtype.list.df$EVTYPE]
+stormdata.econ.finalsummary.dt <- stormdata.econ.summary.dt[stormdata.econ.summary.dt$EVTYPE %in% ref.evtype.list.df$EVTYPE]
+
+hh.report.df <- stormdata.hh.finalsummary.dt[rownames(stormdata.hh.finalsummary.dt) %in% c(1:10) ]
+hh.report.df$ID <- 1:10
+hh.report.df$LABEL <- paste(str_pad(hh.report.df$ID,2,pad = "0"),"-",hh.report.df$EVTYPE)
+
+# Top 10 reports
+econ.report.df <- stormdata.econ.finalsummary.dt[rownames(stormdata.econ.finalsummary.dt) %in% c(1:10) ]
+econ.report.df$ID <- 1:10
+econ.report.df$LABEL <- paste(str_pad(econ.report.df$ID,2,pad = "0"),"-",econ.report.df$EVTYPE)
+```
+
+### Results
+
+```{r generate.reports,message=FALSE,warning=FALSE}
+hh.p <- ggplot(hh.report.df,aes(x = LABEL, y = TOTAL)) +
+        geom_bar(stat = "identity") +
+        theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+        ggtitle("Weather Event Human Health Impact (fatalities and injuries)") +
+        xlab("Event Types") + ylab("Fatality or Injury recorded")
+
+econ.p <- ggplot(econ.report.df,aes(x = LABEL, y = TOTAL)) +
+        geom_bar(stat = "identity") +
+        theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+        ggtitle("Weather Event Economic Impact (Property + Crop Damage)") +
+        xlab("Event Types") + ylab("Damage Impact (USD)")
+
+print(hh.p)
+print(econ.p)
